@@ -1,0 +1,25 @@
+[[source]]
+url = "https://pypi.org/simple"
+verify_ssl = true
+name = "pypi"
+
+[packages]
+matrix-nio = {extras = ["e2e"], version = "*"}
+asyncpg = "*"
+aiosqlite = "*"
+click = "*"
+pyyaml = "*"
+requests = "*"
+yt-dlp = "*"
+python-magic = "*"
+aiofiles = "*"
+
+[dev-packages]
+ipython = "*"
+black = "*"
+isort = "*"
+pycodestyle = "*"
+
+[requires]
+python_version = "3.11"
+python_full_version = "3.11.0"

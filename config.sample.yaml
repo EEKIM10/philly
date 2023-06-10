@@ -1,0 +1,16 @@
+cleanup: false  # only use this if you want to delete the session afterward. do NOT use with a token.
+database: null  # Not implemented yet
+homeserver: https://matrix.nexy7574.co.uk  # the resolved homeserver to contact
+logging:
+  file: phillip.log  # the file to log to
+  level: INFO  # the level to log at. DEBUG/INFO/WARNING/ERROR/CRITICAL. INFO is recommended for testing, WARNING+ for production
+  mode: w  # the mode to open the file in. w for write, a for append
+  stdout_mirror: true  # whether to mirror the log to stdout
+login:
+  device_name: my-device-id  # the device ID/name to log in with
+  password: abcdefg  # an optional password. It's recommended to use a token instead, where possible.
+  token: syt_abc  # a token to log in with. This is recommended over a password, where possible.
+  # You can get a token by running `python3 main.py get-access-token --help`.
+
+store_path: ./state  # the directory to store the state database in. Must be an existing directory.
+user: '@deactivated:nexy7574.co.uk'  # the fully qualified user ID to log in with
