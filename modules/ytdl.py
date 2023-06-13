@@ -14,6 +14,19 @@ import typing
 if typing.TYPE_CHECKING:
     from main import Client
 
+YTDL_ARGS: typing.Dict[str, typing.Any] = {
+    "outtmpl": "%(title).50s.%(ext)s",
+    "restrictfilenames": True,
+    "noplaylist": True,
+    "nocheckcertificate": True,
+    "ignoreerrors": True,
+    "no_warnings": True,
+    "quiet": True,
+    'noprogress': True,
+    "nooverwrites": True,
+    'format': "(bv+ba/b)[filesize<100M]/b"
+}
+
 
 class YoutubeDownloadModule:
     def __init__(self, client: "Client"):
@@ -45,20 +58,10 @@ class YoutubeDownloadModule:
                     self.log.error("Error in command %r: %s", command, e, exc_info=e)
 
     def _download(self, url: str, download_format: str, *, temp_dir: str) -> typing.List[pathlib.Path]:
-        args = {
-            "outtmpl": "%(title).50s.%(ext)s",
-            "restrictfilenames": True,
-            "noplaylist": True,
-            "nocheckcertificate": True,
-            "ignoreerrors": True,
-            "no_warnings": True,
-            "quiet": True,
-            'noprogress': True,
-            "nooverwrites": True,
-            "paths": {
-                "temp": temp_dir,
-                "home": temp_dir
-            }
+        args = YTDL_ARGS.copy()
+        args["paths"] = {
+            "temp": temp_dir,
+            "home": temp_dir
         }
         if download_format:
             args["format"] = download_format
@@ -73,28 +76,28 @@ class YoutubeDownloadModule:
 
         return list(pathlib.Path(temp_dir).glob("*"))
 
-    async def upload_files(self, file: pathlib.Path):
-        def get_metadata(_file: pathlib.Path):
-            _meta = subprocess.run(
-                [
-                    "ffprobe",
-                    "-of",
-                    "json",
-                    "-loglevel",
-                    "9",
-                    "-show_entries",
-                    "stream=width,height",
-                    str(file)
-                ],
-                capture_output=True,
-                encoding="utf-8",
-                errors="replace"
-            )
-            if _meta.returncode != 0:
-                self.log.warning("ffprobe failed (%d): %s", _meta.returncode, _meta.stderr)
-                return
-            return json.loads(_meta.stdout)
+    def get_metadata(self, file: pathlib.Path):
+        _meta = subprocess.run(
+            [
+                "ffprobe",
+                "-of",
+                "json",
+                "-loglevel",
+                "9",
+                "-show_entries",
+                "stream=width,height",
+                str(file)
+            ],
+            capture_output=True,
+            encoding="utf-8",
+            errors="replace"
+        )
+        if _meta.returncode != 0:
+            self.log.warning("ffprobe failed (%d): %s", _meta.returncode, _meta.stderr)
+            return
+        return json.loads(_meta.stdout)
 
+    async def upload_files(self, file: pathlib.Path):
         stat = file.stat()
         # max 99Mb
         if stat.st_size > 99 * 1024 * 1024:
@@ -102,7 +105,7 @@ class YoutubeDownloadModule:
             return
         mime = magic.Magic(mime=True).from_file(file)
         self.log.debug("File %s is %s", file, mime)
-        metadata = get_metadata(file) or {}
+        metadata = self.get_metadata(file) or {}
         if not metadata.get("streams"):
             self.log.warning("No streams for %s", file)
             return
@@ -138,6 +141,14 @@ class YoutubeDownloadModule:
             body["url"] = response.content_uri
             return body
 
+    async def get_video_info(self, url: str) -> dict:
+        """Extracts JSON information about the video"""
+        args = YTDL_ARGS.copy()
+        with YoutubeDL(args) as ytdl_instance:
+            info = ytdl_instance.extract_info(url, download=False)
+        self.log.debug("ytdl info for %s: %r", url, info)
+        return info
+
     async def ytdl(self, room: nio.MatrixRoom, event: nio.RoomMessageText, args: str):
         """Downloads a video from YouTube"""
         if not args:
@@ -146,16 +157,33 @@ class YoutubeDownloadModule:
 
         args = args.split()
         url = args.pop(0)
-        dl_format = "(bv+ba/b)[filesize<100M]"
+        dl_format = "(bv+ba/b)[filesize<100M]/b"
         if args:
             dl_format = args.pop(0)
 
-        self.log.debug(
-            "Message data: %r",
-            await self.client.reply_to(room, event, "Downloading...")
-        )
+        msg = await self.client.reply_to(room, event, "Downloading...")
+        msg_id = msg.event_id
         try:
             with tempfile.TemporaryDirectory() as temp_dir:
+                info = await self.get_video_info(url)
+                if not info:
+                    await self.client.edit_message(room, msg_id, "Could not get video info (Restricted?)")
+                    return
+                await self.client.edit_message(
+                    room,
+                    msg_id,
+                    "Downloading [%r](%s)..." % (info["title"], info["original_url"]),
+                    extra={
+                        "m.new_content": {
+                            "msgtype": "m.notice",
+                            "format": "org.matrix.custom.html",
+                            "body": "Downloading Downloading [%r](%s)..." % (info["title"], info["original_url"]),
+                            "formatted_body": "Downloading <a href=\"%s\">%s</a>..." % (
+                                info["original_url"], info["title"]
+                            ),
+                        }
+                    }
+                )
                 self.log.info("Downloading %s to %s", url, temp_dir)
                 files = await self.client.loop.run_in_executor(
                     None,
@@ -163,9 +191,16 @@ class YoutubeDownloadModule:
                 )
                 self.log.info("Downloaded %d files", len(files))
                 if not files:
-                    await self.client.reply_to(room, event, "No files downloaded")
+                    await self.client.edit_message(room, msg_id, "No files downloaded")
                     return
+                sent = False
                 for file in files:
+                    data = self.get_metadata(file)
+                    size_mb = file.stat().st_size / 1024 / 1024
+                    resolution = "%dx%d" % (data["streams"][0]["width"], data["streams"][0]["height"])
+                    await self.client.edit_message(
+                        room, msg_id, "Uploading %s (%dMb, %s)..." % (file.name, size_mb, resolution)
+                    )
                     body = await self.upload_files(file)
                     self.log.debug("Upload body: %s", body)
                     if body:
@@ -179,6 +214,23 @@ class YoutubeDownloadModule:
                             "m.room.message",
                             body
                         )
+                        sent = True
+                if sent:
+                    await self.client.edit_message(
+                        room,
+                        msg_id,
+                        "Completed, downloaded [your video]({})".format("url"),
+                        extra={
+                            "m.new_content": {
+                                "msgtype": "m.text",
+                                "format": "org.matrix.custom.html",
+                                "body": "Completed, downloaded <a href=\"{}\">your video</a>".format(url),
+                                "formatted_body": "Completed, downloaded <a href=\"{}\">your video</a>".format(url)
+                            }
+                        }
+                    )
+                    await asyncio.sleep(10)
+                    await self.client.room_redact(room.room_id, msg_id, reason="Command completed.")
         except Exception as e:
             self.log.error("Error: %s", e, exc_info=e)
             await self.client.reply_to(room, event, "Error: " + str(e))

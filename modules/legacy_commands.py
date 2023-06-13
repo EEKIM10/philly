@@ -18,6 +18,7 @@ class LegacyCommands:
             "join": self.join,
             "leave": self.leave,
             "trust": self.trust,
+            "edit": self.edit_test,
         }
         self.log = logging.getLogger(__name__)
 
@@ -43,6 +44,23 @@ class LegacyCommands:
                     await self.to_mount[command.lower()](room, event, args)
                 except Exception as e:
                     self.log.error("Error in command %r: %s", command, e, exc_info=e)
+
+    async def edit_test(self, room: nio.MatrixRoom, event: nio.RoomMessageText, _):
+        message = await self.client.reply_to(room, event, "This message will be edited in 5 seconds.")
+        await asyncio.sleep(5)
+        body = {
+            "msgtype": "m.text",
+            "body": "This message has been edited.",
+            "m.new_content": {
+                "msgtype": "m.text",
+                "body": "This message has been edited.",
+            },
+            "m.relates_to": {
+                "rel_type": "m.replace",
+                "event_id": message.event_id,
+            }
+        }
+        await self.client.room_send(room.room_id, "m.room.message", body)
     
     async def ping(self, room: nio.MatrixRoom, event: nio.RoomMessageText, _):
         """Shows latency"""

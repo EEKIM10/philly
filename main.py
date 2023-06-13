@@ -201,20 +201,61 @@ class Client(nio.AsyncClient):
         self.log.debug("Sync response: %r", result)
         return result
 
-    async def reply_to(self, room: nio.MatrixRoom, message: nio.RoomMessageText, text: str):
+    async def reply_to(
+            self,
+            room: nio.MatrixRoom,
+            message: nio.RoomMessageText,
+            text: str,
+            extra: dict = None
+    ) -> nio.RoomSendResponse | nio.RoomSendError:
         """Helper to reply to a message."""
-        await self.room_send(
+        body = {
+            "msgtype": "m.notice",
+            "body": text,
+            "m.relates_to": {
+                "m.in_reply_to": {
+                    "event_id": message.event_id
+                }
+            }
+        }
+        if extra:
+            body.update(extra)
+        return await self.room_send(
             room_id=room.room_id,
             message_type="m.room.message",
-            content={
-                "msgtype": "m.text",
-                "body": text,
-                "m.relates_to": {
-                    "m.in_reply_to": {
-                        "event_id": message.event_id
-                    }
-                }
+            content=body,
+            ignore_unverified_devices=True
+        )
+
+    async def edit_message(
+            self,
+            room: nio.MatrixRoom,
+            message: nio.RoomMessageText | str,
+            new_content: str,
+            extra: dict = None
+    ) -> nio.RoomSendResponse | nio.RoomSendError:
+        """Edits a message."""
+        if isinstance(message, nio.RoomMessageText):
+            message = message.event_id
+        
+        body = {
+            "msgtype": "m.notice",
+            "body": new_content,
+            "m.new_content": {
+                "msgtype": "m.notice",
+                "body": new_content
             },
+            "m.relates_to": {
+                "rel_type": "m.replace",
+                "event_id": message
+            }
+        }
+        if extra:
+            body.update(extra)
+        return await self.room_send(
+            room_id=room.room_id,
+            message_type="m.room.message",
+            content=body,
             ignore_unverified_devices=True
         )
 
@@ -226,6 +267,8 @@ class Client(nio.AsyncClient):
         except ValueError:
             command = value
             args = ""
+        if not command:  # empty message
+            return "", ""  # should raise here?
         if strip_prefix:
             if command[0] != "!":
                 raise ValueError("Message does not start with the prefix")
@@ -258,7 +301,7 @@ class Client(nio.AsyncClient):
                                 room_id=room.room_id,
                                 message_type="m.room.message",
                                 content={
-                                    "msgtype": "m.text",
+                                    "msgtype": "m.notice",
                                     "body": HELLO % event.sender,
                                     "format": "org.matrix.custom.html",
                                     "formatted_body": HELLO % event.sender,
